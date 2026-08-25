@@ -104,21 +104,38 @@ use std::{
     sync::{LazyLock, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
+#[cfg(feature = "static-link")]
+use crate::bindings::CoolProp;
+
 pub mod bindings;
 
 /// `CoolProp` dynamic library absolute path.
-#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+#[cfg(all(target_os = "linux", target_arch = "aarch64", not(feature = "static-link")))]
 pub const COOLPROP_PATH: &str = coolprop_sys_linux_aarch64::COOLPROP_PATH;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", not(feature = "static-link")))]
 pub const COOLPROP_PATH: &str = coolprop_sys_linux_x86_64::COOLPROP_PATH;
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(target_os = "macos", target_arch = "aarch64", not(feature = "static-link")))]
 pub const COOLPROP_PATH: &str = coolprop_sys_macos_aarch64::COOLPROP_PATH;
-#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+#[cfg(all(target_os = "macos", target_arch = "x86_64", not(feature = "static-link")))]
 pub const COOLPROP_PATH: &str = coolprop_sys_macos_x86_64::COOLPROP_PATH;
-#[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+#[cfg(all(target_os = "windows", target_arch = "aarch64", not(feature = "static-link")))]
 pub const COOLPROP_PATH: &str = coolprop_sys_windows_aarch64::COOLPROP_PATH;
-#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+#[cfg(all(target_os = "windows", target_arch = "x86_64", not(feature = "static-link")))]
 pub const COOLPROP_PATH: &str = coolprop_sys_windows_x86_64::COOLPROP_PATH;
+
+// Force-load the correct sys crate so it links correctly for static ---
+#[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "static-link"))]
+extern crate coolprop_sys_linux_aarch64;
+#[cfg(all(target_os = "linux", target_arch = "x86_64", feature = "static-link"))]
+extern crate coolprop_sys_linux_x86_64;
+#[cfg(all(target_os = "macos", target_arch = "aarch64", feature = "static-link"))]
+extern crate coolprop_sys_macos_aarch64;
+#[cfg(all(target_os = "macos", target_arch = "x86_64", feature = "static-link"))]
+extern crate coolprop_sys_macos_x86_64;
+#[cfg(all(target_os = "windows", target_arch = "aarch64", feature = "static-link"))]
+extern crate coolprop_sys_windows_aarch64;
+#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "static-link"))]
+extern crate coolprop_sys_windows_x86_64;
 
 /// Process-wide synchronization boundary for the loaded `CoolProp` dynamic library.
 ///
@@ -250,8 +267,13 @@ impl Deref for ExclusiveAccess<'_> {
 /// # See Also
 ///
 /// - [`CoolPropLib.h` Reference](https://coolprop.org/_static/doxygen/html/_cool_prop_2_cool_prop_lib_8h.html)
+#[cfg(feature = "static-link")]
+pub static COOLPROP: LazyLock<CoolPropLib> = LazyLock::new(|| CoolPropLib(RwLock::new(CoolProp::new().expect("Failed to initialize CoolProp bindings"))));
+
+#[cfg(not(feature = "static-link"))]
 pub static COOLPROP: LazyLock<CoolPropLib> = LazyLock::new(load_coolprop);
 
+#[cfg(not(feature = "static-link"))]
 fn load_coolprop() -> CoolPropLib {
     let coolprop = unsafe { bindings::CoolProp::new(COOLPROP_PATH) }
         .expect("CoolProp dynamic library should load from `COOLPROP_PATH`");
@@ -273,6 +295,7 @@ mod tests {
 
     assert_not_impl_any!(ExclusiveAccess<'static>: std::ops::DerefMut);
 
+    #[cfg(all(test, not(feature = "static-link")))]
     fn test_lib() -> CoolPropLib {
         LazyLock::force(&COOLPROP);
         let coolprop = unsafe { bindings::CoolProp::new(COOLPROP_PATH) }
