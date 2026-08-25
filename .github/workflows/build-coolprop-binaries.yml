@@ -50,7 +50,7 @@ jobs:
           if [ "${{ matrix.lib-type }}" = "shared" ]; then
             cmake . -DCOOLPROP_SHARED_LIBRARY=ON -DCMAKE_BUILD_TYPE=Release -DFORCE_BITNESS_NATIVE=ON
           else
-            cmake . -DCOOLPROP_STATIC_LIBRARY=ON -DCMAKE_BUILD_TYPE=Release -DFORCE_BITNESS_NATIVE=ON -DCMAKE_CXX_FLAGS="-DCOOLPROP_LIB"
+            cmake . -DCOOLPROP_STATIC_LIBRARY=ON -DCMAKE_BUILD_TYPE=Release -DFORCE_BITNESS_NATIVE=ON -DCMAKE_CXX_FLAGS="-DCOOLPROP_LIB" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
           fi
         shell: bash
       - name: Build CoolProp binaries
