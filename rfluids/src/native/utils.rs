@@ -4,7 +4,7 @@ use coolprop_sys::{COOLPROP, ExclusiveAccess, bindings};
 
 use super::{
     CoolProp, Result,
-    common::{StringBuffer, c_string, get_error},
+    common::{ErrorBuffer, c_string_trimmed, StringBuffer, c_string, get_error},
 };
 use crate::io::ConfigValue;
 
@@ -335,6 +335,62 @@ impl CoolProp {
         let key = key.as_ref().trim();
         let value = value.into();
         set_config(key, &value)
+    }
+
+    /// Applies a simple mixing rule for a binary pair in the process-wide
+    /// mixture binary pair library, so it's picked up by every subsequent
+    /// mixture calculation for that pair.
+    ///
+    /// # Arguments
+    ///
+    /// - `identifier1` -- CAS number (or name) of the first component of the binary pair
+    /// - `identifier2` -- CAS number (or name) of the second component of the binary pair
+    /// - `rule` -- simple mixing rule to apply; one of `"linear"` or `"Lorentz-Berthelot"`
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CoolPropError`](crate::native::CoolPropError) for invalid inputs, and also
+    /// if this binary pair already has an entry in the library, unless the `CoolProp`
+    /// configuration variable `OVERWRITE_BINARY_INTERACTION` is set to `true`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// // `no_run`: exercises the binding's shape, not its behavior - see the
+    /// // `NOTE` above `apply_simple_mixing_rule`'s tests for why this can't
+    /// // execute against the currently-vendored native `CoolProp` libraries yet.
+    /// use rfluids::prelude::*;
+    ///
+    /// let res = CoolProp::apply_simple_mixing_rule("Helium", "Xenon", "linear");
+    /// assert!(res.is_ok());
+    /// ```
+    ///
+    /// # See Also
+    ///
+    /// - [Predefined Mixtures](https://coolprop.org/coolprop/HighLevelAPI.html#predefined-mixtures)
+    /// - [Mixture binary pairs](https://coolprop.org/fluid_properties/Mixtures.html)
+    pub fn apply_simple_mixing_rule(
+        identifier1: impl AsRef<str>,
+        identifier2: impl AsRef<str>,
+        rule: impl AsRef<str>,
+    ) -> Result<()> {
+        let identifier1 = c_string_trimmed("identifier1", identifier1)?;
+        let identifier2 = c_string_trimmed("identifier2", identifier2)?;
+        let rule = c_string_trimmed("rule", rule)?;
+        let mut err_buffer = ErrorBuffer::default();
+        let (err_code, err_message, err_buffer_capacity) = err_buffer.as_mut_parts();
+        let coolprop = COOLPROP.exclusive_access();
+        unsafe {
+            coolprop.apply_simple_mixing_rule(
+                identifier1.as_ptr(),
+                identifier2.as_ptr(),
+                rule.as_ptr(),
+                err_code,
+                err_message,
+                err_buffer_capacity,
+            );
+        }
+        err_buffer.into_result()
     }
 }
 

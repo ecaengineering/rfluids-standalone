@@ -88,6 +88,7 @@ generate_static_coolprop! {
     pub fn set_config_double(key: *const ::core::ffi::c_char, val: f64);
     pub fn set_config_bool(key: *const ::core::ffi::c_char, val: bool);
     pub fn set_departure_functions(string_data: *const ::core::ffi::c_char, errcode: *mut ::core::ffi::c_long, message_buffer: *mut ::core::ffi::c_char, buffer_length: ::core::ffi::c_long);
+    pub fn apply_simple_mixing_rule(identifier1: *const ::core::ffi::c_char, identifier2: *const ::core::ffi::c_char, rule: *const ::core::ffi::c_char, errcode: *mut ::core::ffi::c_long, message_buffer: *mut ::core::ffi::c_char, buffer_length: ::core::ffi::c_long);
     pub fn set_reference_stateS(Ref: *const ::core::ffi::c_char, reference_state: *const ::core::ffi::c_char) -> ::core::ffi::c_int;
     pub fn set_reference_stateD(Ref: *const ::core::ffi::c_char, T: f64, rhomolar: f64, hmolar0: f64, smolar0: f64) -> ::core::ffi::c_int;
     pub fn propssi_(Output: *const ::core::ffi::c_char, Name1: *const ::core::ffi::c_char, Prop1: *const f64, Name2: *const ::core::ffi::c_char, Prop2: *const f64, FluidName: *const ::core::ffi::c_char, output: *mut f64);

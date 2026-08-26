@@ -81,6 +81,14 @@ pub struct CoolProp {
         message_buffer: *mut ::core::ffi::c_char,
         buffer_length: ::core::ffi::c_long,
     ),
+    pub apply_simple_mixing_rule: unsafe extern "C" fn(
+        identifier1: *const ::core::ffi::c_char,
+        identifier2: *const ::core::ffi::c_char,
+        rule: *const ::core::ffi::c_char,
+        errcode: *mut ::core::ffi::c_long,
+        message_buffer: *mut ::core::ffi::c_char,
+        buffer_length: ::core::ffi::c_long,
+    ),
     pub set_reference_stateS: unsafe extern "C" fn(
         Ref: *const ::core::ffi::c_char,
         reference_state: *const ::core::ffi::c_char,
@@ -532,6 +540,8 @@ impl CoolProp {
         let set_config_bool = __library.get(b"set_config_bool\0").map(|sym| *sym)?;
         let set_departure_functions =
             __library.get(b"set_departure_functions\0").map(|sym| *sym)?;
+        let apply_simple_mixing_rule =
+            __library.get(b"apply_simple_mixing_rule\0").map(|sym| *sym)?;
         let set_reference_stateS = __library.get(b"set_reference_stateS\0").map(|sym| *sym)?;
         let set_reference_stateD = __library.get(b"set_reference_stateD\0").map(|sym| *sym)?;
         let propssi_ = __library.get(b"propssi_\0").map(|sym| *sym)?;
@@ -636,6 +646,7 @@ impl CoolProp {
             set_config_double,
             set_config_bool,
             set_departure_functions,
+            apply_simple_mixing_rule,
             set_reference_stateS,
             set_reference_stateD,
             propssi_,
@@ -830,6 +841,24 @@ impl CoolProp {
         buffer_length: ::core::ffi::c_long,
     ) {
         (self.set_departure_functions)(string_data, errcode, message_buffer, buffer_length)
+    }
+    pub unsafe fn apply_simple_mixing_rule(
+        &self,
+        identifier1: *const ::core::ffi::c_char,
+        identifier2: *const ::core::ffi::c_char,
+        rule: *const ::core::ffi::c_char,
+        errcode: *mut ::core::ffi::c_long,
+        message_buffer: *mut ::core::ffi::c_char,
+        buffer_length: ::core::ffi::c_long,
+    ) {
+        (self.apply_simple_mixing_rule)(
+            identifier1,
+            identifier2,
+            rule,
+            errcode,
+            message_buffer,
+            buffer_length,
+        )
     }
     pub unsafe fn set_reference_stateS(
         &self,
