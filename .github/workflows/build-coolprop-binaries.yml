@@ -3,9 +3,13 @@ name: Build CoolProp binaries
 on:
   workflow_dispatch:
     inputs:
-      coolprop_version:
+      coolprop_repo:
         required: true
-        description: "CoolProp version"
+        description: "owner/repo to build from"
+        default: "CoolProp/CoolProp"
+      coolprop_ref:
+        required: true
+        description: "Branch, tag, or commit"
         default: "v8.0.0"
 
 jobs:
@@ -34,8 +38,8 @@ jobs:
       - name: Checkout CoolProp repository
         uses: actions/checkout@v7
         with:
-          repository: CoolProp/CoolProp
-          ref: ${{ github.event.inputs.coolprop_version }}
+          repository: ${{ github.event.inputs.coolprop_repo }}
+          ref: ${{ github.event.inputs.coolprop_ref }}
           submodules: recursive
       - name: Setup Python
         uses: actions/setup-python@v7
