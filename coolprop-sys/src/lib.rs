@@ -122,6 +122,8 @@ pub const COOLPROP_PATH: &str = coolprop_sys_macos_x86_64::COOLPROP_PATH;
 pub const COOLPROP_PATH: &str = coolprop_sys_windows_aarch64::COOLPROP_PATH;
 #[cfg(all(target_os = "windows", target_arch = "x86_64", not(feature = "static-link")))]
 pub const COOLPROP_PATH: &str = coolprop_sys_windows_x86_64::COOLPROP_PATH;
+#[cfg(all(target_os = "emscripten", target_arch = "wasm32", not(feature = "static-link")))]
+pub const COOLPROP_PATH: &str = coolprop_sys_wasm32_unknown_emscripten::COOLPROP_PATH;
 
 // Force-load the correct sys crate so it links correctly for static ---
 #[cfg(all(target_os = "linux", target_arch = "aarch64", feature = "static-link"))]
@@ -136,6 +138,8 @@ extern crate coolprop_sys_macos_x86_64;
 extern crate coolprop_sys_windows_aarch64;
 #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "static-link"))]
 extern crate coolprop_sys_windows_x86_64;
+#[cfg(all(target_os = "emscripten", target_arch = "wasm32", feature = "static-link"))]
+extern crate coolprop_sys_wasm32_unknown_emscripten;
 
 /// Process-wide synchronization boundary for the loaded `CoolProp` dynamic library.
 ///

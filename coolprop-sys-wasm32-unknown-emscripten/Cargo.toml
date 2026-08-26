@@ -1,0 +1,19 @@
+[package]
+name = "coolprop-sys-wasm32-unknown-emscripten"
+version = "8.0.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "CoolProp native binaries for WebAssembly (Emscripten)"
+readme = "README.md"
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords = ["CoolProp", "native", "binaries", "WebAssembly", "Emscripten"]
+categories = ["api-bindings", "science"]
+links = "coolprop"
+
+[features]
+static-link = []
+
+[dependencies]
