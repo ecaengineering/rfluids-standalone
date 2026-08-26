@@ -11,6 +11,7 @@ repository.workspace = true
 license.workspace = true
 keywords = ["CoolProp", "ffi", "bindings"]
 categories = ["api-bindings", "science"]
+links = "coolprop-sys"
 
 [features]
 regen-bindings = ["dep:bindgen"]
@@ -21,6 +22,7 @@ static-link = [
     "coolprop-sys-macos-aarch64/static-link",
     "coolprop-sys-windows-x86-64/static-link",
     "coolprop-sys-windows-aarch64/static-link",
+    "coolprop-sys-wasm32-unknown-emscripten/static-link",
 ]
 
 [dependencies]
@@ -49,3 +51,6 @@ coolprop-sys-windows-aarch64 = { path = "../coolprop-sys-windows-aarch64", versi
 
 [target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
 coolprop-sys-windows-x86-64 = { path = "../coolprop-sys-windows-x86-64", version = "8.0.0" }
+
+[target.'cfg(all(target_os = "emscripten", target_arch = "wasm32"))'.dependencies]
+coolprop-sys-wasm32-unknown-emscripten = { path = "../coolprop-sys-wasm32-unknown-emscripten", version = "8.0.0" }

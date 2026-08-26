@@ -1,4 +1,8 @@
 fn main() {
+    if let Ok(artifact) = std::env::var("DEP_COOLPROP_WASM_PATH") {
+        println!("cargo:wasm_path={artifact}");
+    }
+    
     #[cfg(feature = "regen-bindings")]
     {
         use std::{env, path::PathBuf};
