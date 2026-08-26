@@ -10,7 +10,7 @@ on:
 
 jobs:
   build-coolprop-binaries:
-    name: ${{ matrix.platform.label }}
+    name: ${{ matrix.platform.label }} (${{ matrix.lib-type }})
     runs-on: ${{ matrix.platform.os }}
     strategy:
       fail-fast: false
@@ -28,6 +28,8 @@ jobs:
             label: windows-aarch64
           - os: windows-latest
             label: windows-x86-64
+          - os: ubuntu-latest
+            label: wasm32-unknown-emscripten
         lib-type: [shared, static]
 
     steps:
@@ -45,7 +47,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install six
-      - name: Build a Makefile
+      - name: Setup Emscripten (wasm32-unknown-emscripten)
+        if: matrix.platform.label == 'wasm32-unknown-emscripten'
+        uses: emscripten-core/setup-emsdk@v15
+      - name: Build a Makefile (Standard Platforms)
+        if: matrix.platform.label != 'wasm32-unknown-emscripten'
         run: |
           if [ "${{ matrix.lib-type }}" = "shared" ]; then
             cmake . -DCOOLPROP_SHARED_LIBRARY=ON -DCMAKE_BUILD_TYPE=Release -DFORCE_BITNESS_NATIVE=ON
@@ -53,16 +59,36 @@ jobs:
             cmake . -DCOOLPROP_STATIC_LIBRARY=ON -DCMAKE_BUILD_TYPE=Release -DFORCE_BITNESS_NATIVE=ON -DCMAKE_CXX_FLAGS="-DCOOLPROP_LIB" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
           fi
         shell: bash
+
+      - name: Build a Makefile (wasm32-unknown-emscripten)
+        if: matrix.platform.label == 'wasm32-unknown-emscripten'
+        run: |
+          if [ "${{ matrix.lib-type }}" = "shared" ]; then
+            emcmake cmake . \
+              -DCOOLPROP_SHARED_LIBRARY=ON \
+              -DCOOLPROP_STATIC_LIBRARY=OFF \
+              -DCMAKE_C_FLAGS="-DCOOLPROP_NO_INCBIN -fwasm-exceptions -fPIC" \
+              -DCMAKE_CXX_FLAGS="-DCOOLPROP_NO_INCBIN -fwasm-exceptions -fPIC" \
+              -DCMAKE_BUILD_TYPE=Release
+          else
+            emcmake cmake . \
+              -DCOOLPROP_EXTERNC_LIBRARY=ON \
+              -DCOOLPROP_STATIC_LIBRARY=ON \
+              -DCMAKE_C_FLAGS="-DCOOLPROP_NO_INCBIN -fwasm-exceptions -fPIC" \
+              -DCMAKE_CXX_FLAGS="-DCOOLPROP_NO_INCBIN -fwasm-exceptions -fPIC" \
+              -DCMAKE_BUILD_TYPE=Release
+          fi
+        shell: bash
+
       - name: Build CoolProp binaries
         run: cmake --build . --config Release
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: CoolProp ${{ github.event.inputs.coolprop_version }} (${{ matrix.platform.label }})
+          name: CoolProp ${{ github.event.inputs.coolprop_version }} (${{ matrix.platform.label }}-${{ matrix.lib-type }})
           path: |
             Release/*.dll
             Release/*.lib
-            Release/*.a
             *.dylib
             *.so
             *.a
