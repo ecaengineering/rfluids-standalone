@@ -105,6 +105,16 @@ unsafe extern "C" {
     );
 }
 unsafe extern "C" {
+    pub fn apply_simple_mixing_rule(
+        identifier1: *const ::core::ffi::c_char,
+        identifier2: *const ::core::ffi::c_char,
+        rule: *const ::core::ffi::c_char,
+        errcode: *mut ::core::ffi::c_long,
+        message_buffer: *mut ::core::ffi::c_char,
+        buffer_length: ::core::ffi::c_long,
+    );
+}
+unsafe extern "C" {
     pub fn set_reference_stateS(
         Ref: *const ::core::ffi::c_char,
         reference_state: *const ::core::ffi::c_char,

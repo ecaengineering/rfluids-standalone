@@ -100,6 +100,10 @@ EXPORT_CODE void CONVENTION set_config_bool(const char *key, const bool val);
 EXPORT_CODE void CONVENTION set_departure_functions(const char *string_data, long *errcode,
                                                     char *message_buffer, const long buffer_length);
 
+EXPORT_CODE void CONVENTION apply_simple_mixing_rule(const char* identifier1, const char* identifier2,
+                                                     const char* rule, long* errcode,
+                                                     char* message_buffer, const long buffer_length);
+
 EXPORT_CODE int CONVENTION set_reference_stateS(const char *Ref, const char *reference_state);
 
 EXPORT_CODE int CONVENTION set_reference_stateD(const char *Ref, double T, double rhomolar,
