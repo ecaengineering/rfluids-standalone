@@ -15,5 +15,6 @@ links = "coolprop"
 
 [features]
 static-link = []
+static-refprop = []
 
 [dependencies]

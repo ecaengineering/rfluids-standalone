@@ -4,7 +4,12 @@ use std::{
 };
 
 const LIB_PREFIX: &str = "lib";
+
+#[cfg(feature = "static-refprop")]
+const LIB_NAME: &str = "CoolProp-refprop";
+#[cfg(not(feature = "static-refprop"))]
 const LIB_NAME: &str = "CoolProp";
+
 const LIB_EXTENSION: &str = ".so";
 const STATIC_LIB_EXTENSION: &str = ".a";
 
