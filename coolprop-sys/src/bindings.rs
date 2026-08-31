@@ -15,7 +15,20 @@
     clippy::pedantic
 )]
 
-#[cfg(feature = "static-link")]
+#[cfg(all(feature = "static-link", feature = "regen-bindings"))]
+pub mod bindings_generated_static {
+    #![allow(
+        dead_code,
+        missing_docs,
+        non_camel_case_types,
+        non_snake_case,
+        non_upper_case_globals,
+        unsafe_op_in_unsafe_fn
+    )]
+    include!(concat!(env!("OUT_DIR"), "/bindings_static.rs"));
+}
+
+#[cfg(all(feature = "static-link", not(feature = "regen-bindings")))]
 pub mod bindings_generated_static {
     #![allow(
         dead_code,
@@ -40,7 +53,9 @@ macro_rules! generate_static_coolprop {
         pub struct CoolProp;
 
         impl CoolProp {
-            /// Matches the dynamic library constructor signature
+            /// Statically linked functions are resolved at link time, so this can never fail.
+            /// The fallible signature only exists so call sites don't need to differ from the
+            /// dynamic constructor's.
             pub fn new() -> Result<Self, ()> {
                 Ok(CoolProp)
             }
@@ -131,7 +146,7 @@ generate_static_coolprop! {
 }
 
 #[cfg(all(not(feature = "static-link"), feature = "regen-bindings"))]
-include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+include!(concat!(env!("OUT_DIR"), "/bindings_dynamic.rs"));
 
 #[cfg(all(not(feature = "static-link"), not(feature = "regen-bindings")))]
 include!("bindings_generated_dynamic.rs");

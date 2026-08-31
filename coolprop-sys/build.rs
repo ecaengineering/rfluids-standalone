@@ -3,7 +3,6 @@ fn main() {
     {
         use std::{env, path::PathBuf};
 
-        let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
         let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
         println!("cargo:rerun-if-changed=build.rs");
@@ -28,7 +27,6 @@ fn main() {
             .write_to_file(out_dir.join("bindings_static.rs"))
             .expect("static bindings should be written to `OUT_DIR`");
 
-        // Only generate dynamic library dynamic pointers for non-WASM targets
         let dynamic_bindings = base_builder()
             .dynamic_library_name("CoolProp")
             .dynamic_link_require_all(true)
