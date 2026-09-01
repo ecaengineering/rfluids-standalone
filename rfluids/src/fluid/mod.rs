@@ -314,6 +314,11 @@ pub enum FluidOutputError {
     /// [`BinaryMix`](crate::substance::BinaryMix)'s already-labeled `fraction`).
     #[error("labeled mole fractions are only available for CustomMix-backed fluids")]
     NotACustomMix,
+
+    /// Failed to read the phase envelope built by
+    /// [`Fluid::build_phase_envelope`](crate::fluid::Fluid::build_phase_envelope).
+    #[error("failed to read the phase envelope: {0}")]
+    PhaseEnvelopeUnavailable(CoolPropError),
 }
 
 #[cfg(test)]

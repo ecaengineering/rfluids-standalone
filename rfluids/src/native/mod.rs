@@ -16,7 +16,7 @@ mod low_level_api;
 mod utils;
 
 pub use high_level_api::CoolProp;
-pub use low_level_api::{AbstractState, MAX_COMPONENTS};
+pub use low_level_api::{AbstractState, MAX_COMPONENTS, PhaseEnvelopeData};
 
 /// `CoolProp` error.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
@@ -62,6 +62,15 @@ pub enum CoolPropError {
         /// Number of components `CoolProp` reported.
         reported: usize,
         /// Maximum number of components this call could read back.
+        capacity: usize,
+    },
+
+    /// [`AbstractState::phase_envelope_data`](crate::native::AbstractState::phase_envelope_data)'s
+    /// trace filled the entire point-count buffer -- a sign it may have been truncated, rather
+    /// than a complete trace that just happens to fit exactly.
+    #[error("phase envelope trace filled the entire {capacity}-point buffer -- likely truncated")]
+    PhaseEnvelopeTruncated {
+        /// Point-count capacity that was filled.
         capacity: usize,
     },
 }

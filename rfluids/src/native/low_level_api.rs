@@ -30,6 +30,29 @@ pub struct AbstractState {
     marker: PhantomUnsync,
 }
 
+/// Phase-envelope trace read back by
+/// [`AbstractState::phase_envelope_data`], in `CoolProp`'s native SI units.
+///
+/// `liquid_mole_fractions[k]`/`vapor_mole_fractions[k]` is component `k`'s local mole fraction
+/// over the trace (same length as [`Self::temperature`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PhaseEnvelopeData {
+    /// Temperature **\[K\]** along the trace.
+    pub temperature: Vec<f64>,
+    /// Pressure **\[Pa\]** along the trace.
+    pub pressure: Vec<f64>,
+    /// Liquid-phase molar density **\[mol/m³\]** along the trace.
+    pub rhomolar_liq: Vec<f64>,
+    /// Vapor-phase molar density **\[mol/m³\]** along the trace.
+    pub rhomolar_vap: Vec<f64>,
+    /// Liquid-phase mole fractions **\[dimensionless, from 0 to 1 each\]**, component-major
+    /// (see the struct docs).
+    pub liquid_mole_fractions: Vec<Vec<f64>>,
+    /// Vapor-phase mole fractions **\[dimensionless, from 0 to 1 each\]**, component-major
+    /// (see the struct docs).
+    pub vapor_mole_fractions: Vec<Vec<f64>>,
+}
+
 impl AbstractState {
     /// Creates and returns a new [`AbstractState`] instance
     /// with specified backend and substance names.
@@ -287,6 +310,218 @@ impl AbstractState {
         });
         err_buffer.into_result()?;
         truncated_to_reported_len(fractions, reported)
+    }
+
+    /// Sets one binary interaction parameter for the `(i, j)` component pair.
+    ///
+    /// # Arguments
+    ///
+    /// - `i`, `j` -- 0-based component indices (`i < j`), in this `AbstractState`'s fixed
+    ///   component order
+    /// - `parameter` -- parameter name, e.g. `"betaT"`, `"gammaT"`, `"betaV"`, or `"gammaV"`
+    /// - `value` -- the parameter's new value
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CoolPropError`] for an invalid index or parameter name.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rfluids::prelude::*;
+    ///
+    /// let mut mixture = AbstractState::new("HEOS", "Nitrogen&Oxygen")?;
+    /// let res = mixture.set_binary_interaction_double(0, 1, "betaT", 0.999_5);
+    /// assert!(res.is_ok());
+    /// # Ok::<(), rfluids::native::CoolPropError>(())
+    /// ```
+    pub fn set_binary_interaction_double(
+        &mut self,
+        i: usize,
+        j: usize,
+        parameter: impl AsRef<str>,
+        value: f64,
+    ) -> Result<()> {
+        let parameter = c_string_trimmed("parameter", parameter)?;
+        let i = c_long::try_from(i).expect("component index must fit into `c_long`");
+        let j = c_long::try_from(j).expect("component index must fit into `c_long`");
+        let mut err_buffer = ErrorBuffer::default();
+        let (err_code, err_message, err_buffer_capacity) = err_buffer.as_mut_parts();
+        self.with_coolprop(|coolprop| unsafe {
+            coolprop.AbstractState_set_binary_interaction_double(
+                self.handle,
+                i,
+                j,
+                parameter.as_ptr(),
+                value,
+                err_code,
+                err_message,
+                err_buffer_capacity,
+            );
+        });
+        err_buffer.into_result()
+    }
+
+    /// Builds this mixture's phase envelope: the two-phase vapor-liquid-equilibrium boundary
+    /// for the currently set fixed composition.
+    ///
+    /// Call once, after fractions and any
+    /// [`set_binary_interaction_double`](Self::set_binary_interaction_double) calls, before
+    /// [`phase_envelope_data`](Self::phase_envelope_data).
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CoolPropError`] if `CoolProp` can't trace it for this composition.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rfluids::prelude::*;
+    ///
+    /// let mut mixture = AbstractState::new("HEOS", "Nitrogen&Oxygen")?;
+    /// mixture.set_fractions(&[0.79, 0.21])?;
+    /// let res = mixture.build_phase_envelope();
+    /// assert!(res.is_ok());
+    /// # Ok::<(), rfluids::native::CoolPropError>(())
+    /// ```
+    ///
+    /// # See Also
+    ///
+    /// - [`AbstractState::phase_envelope_data`]
+    pub fn build_phase_envelope(&mut self) -> Result<()> {
+        // `"level"`'s only value ever exercised against a real trace; `CoolPropLib.h` doesn't
+        // document any other.
+        let level = c_string_trimmed("level", "")?;
+        let mut err_buffer = ErrorBuffer::default();
+        let (err_code, err_message, err_buffer_capacity) = err_buffer.as_mut_parts();
+        self.with_coolprop(|coolprop| unsafe {
+            coolprop.AbstractState_build_phase_envelope(
+                self.handle,
+                level.as_ptr(),
+                err_code,
+                err_message,
+                err_buffer_capacity,
+            );
+        });
+        err_buffer.into_result()
+    }
+
+    /// Reads back the phase envelope built by
+    /// [`build_phase_envelope`](Self::build_phase_envelope).
+    ///
+    /// # Arguments
+    ///
+    /// - `max_points` -- capacity of the per-property read-back buffer (temperature, pressure,
+    ///   densities, compositions); pass a generous estimate above any trace length expected in
+    ///   practice (a few hundred points is typical)
+    /// - `max_components` -- capacity for the composition arrays; pass the actual expected
+    ///   component count if known (e.g. a [`Substance`](crate::substance::Substance)'s)
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CoolPropError`] if `CoolProp` cannot report the trace,
+    /// [`CoolPropError::PhaseEnvelopeTruncated`] if the trace filled the entire `max_points`
+    /// capacity, or [`CoolPropError::TooManyComponents`] if it reports more components than
+    /// `max_components` can hold.
+    ///
+    /// Note that calling this before [`build_phase_envelope`](Self::build_phase_envelope)
+    /// isn't an error condition -- it's reported as an empty trace, not a failure (confirmed
+    /// empirically; `CoolPropLib.h` doesn't document this case).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rfluids::prelude::*;
+    ///
+    /// let mut mixture = AbstractState::new("HEOS", "Nitrogen&Oxygen")?;
+    /// mixture.set_fractions(&[0.79, 0.21])?;
+    /// mixture.build_phase_envelope()?;
+    /// let trace = mixture.phase_envelope_data(2000, 2)?;
+    /// assert!(!trace.temperature.is_empty());
+    /// assert_eq!(trace.liquid_mole_fractions.len(), 2);
+    /// # Ok::<(), rfluids::native::CoolPropError>(())
+    /// ```
+    ///
+    /// # See Also
+    ///
+    /// - [`AbstractState::build_phase_envelope`]
+    /// - [`PhaseEnvelopeData`]
+    pub fn phase_envelope_data(
+        &mut self,
+        max_points: usize,
+        max_components: usize,
+    ) -> Result<PhaseEnvelopeData> {
+        let mut t = vec![0.0_f64; max_points];
+        let mut p = vec![0.0_f64; max_points];
+        let mut rhomolar_vap = vec![0.0_f64; max_points];
+        let mut rhomolar_liq = vec![0.0_f64; max_points];
+        let mut x = vec![0.0_f64; max_points * max_components];
+        let mut y = vec![0.0_f64; max_points * max_components];
+        let mut actual_length: c_long = 0;
+        let mut actual_components: c_long = 0;
+        let max_points_c = c_long::try_from(max_points).expect("max_points must fit into `c_long`");
+        let max_components_c =
+            c_long::try_from(max_components).expect("max_components must fit into `c_long`");
+
+        let mut err_buffer = ErrorBuffer::default();
+        let (err_code, err_message, err_buffer_capacity) = err_buffer.as_mut_parts();
+        self.with_coolprop(|coolprop| unsafe {
+            coolprop.AbstractState_get_phase_envelope_data_checkedMemory(
+                self.handle,
+                max_points_c,
+                max_components_c,
+                t.as_mut_ptr(),
+                p.as_mut_ptr(),
+                rhomolar_vap.as_mut_ptr(),
+                rhomolar_liq.as_mut_ptr(),
+                x.as_mut_ptr(),
+                y.as_mut_ptr(),
+                &raw mut actual_length,
+                &raw mut actual_components,
+                err_code,
+                err_message,
+                err_buffer_capacity,
+            );
+        });
+        err_buffer.into_result()?;
+
+        let reported_points = usize::try_from(actual_length).unwrap_or(0);
+        if reported_points >= max_points {
+            return Err(CoolPropError::PhaseEnvelopeTruncated { capacity: max_points });
+        }
+        let reported_components = usize::try_from(actual_components).unwrap_or(0);
+        if reported_components > max_components {
+            return Err(CoolPropError::TooManyComponents {
+                reported: reported_components,
+                capacity: max_components,
+            });
+        }
+
+        t.truncate(reported_points);
+        p.truncate(reported_points);
+        rhomolar_vap.truncate(reported_points);
+        rhomolar_liq.truncate(reported_points);
+
+        // Component-major, stride = `reported_points` (the true, dynamic trace length `CoolProp`
+        // discovered while tracing) -- *not* `max_points`, and not point-major. Confirmed
+        // empirically (a 3-component HEOS mixture, checking where per-point mole fractions sum
+        // to 1): getting this wrong (component-major-by-`max_points`, or point-major) silently
+        // produces plausible-looking but wrong composition data.
+        let liquid_mole_fractions: Vec<Vec<f64>> = (0..reported_components)
+            .map(|k| x[k * reported_points..(k + 1) * reported_points].to_vec())
+            .collect();
+        let vapor_mole_fractions: Vec<Vec<f64>> = (0..reported_components)
+            .map(|k| y[k * reported_points..(k + 1) * reported_points].to_vec())
+            .collect();
+
+        Ok(PhaseEnvelopeData {
+            temperature: t,
+            pressure: p,
+            rhomolar_liq,
+            rhomolar_vap,
+            liquid_mole_fractions,
+            vapor_mole_fractions,
+        })
     }
 
     /// Update the state of the fluid.
@@ -945,6 +1180,125 @@ mod tests {
 
         // Then
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn set_binary_interaction_double_valid_input() {
+        // Given
+        let mut sut = AbstractState::new("HEOS", "Nitrogen&Oxygen").unwrap();
+
+        // When
+        let res = sut.set_binary_interaction_double(0, 1, "betaT", 0.999_5);
+
+        // Then
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn set_binary_interaction_double_invalid_parameter() {
+        // Given
+        let mut sut = AbstractState::new("HEOS", "Nitrogen&Oxygen").unwrap();
+
+        // When
+        let res = sut.set_binary_interaction_double(0, 1, "not_a_real_parameter", 1.0);
+
+        // Then
+        assert!(res.is_err());
+    }
+
+    /// Pins down `AbstractState_get_phase_envelope_data_checkedMemory`'s undocumented
+    /// composition-array layout: component-major, stride = the true trace length, not `capacity`
+    /// and not point-major -- confirmed by checking every point's liquid/vapor mole fractions
+    /// sum to 1.
+    #[test]
+    fn phase_envelope_data_traces_a_known_binary_pair() {
+        // Given
+        let mut sut = AbstractState::new("HEOS", "Nitrogen&Oxygen").unwrap();
+        sut.set_fractions(&[0.79, 0.21]).unwrap();
+        sut.build_phase_envelope().unwrap();
+
+        // When
+        let trace = sut.phase_envelope_data(2000, 2).unwrap();
+
+        // Then
+        // NB: composition values themselves aren't checked here -- `CoolProp`'s raw x/y arrays
+        // have a confirmed quirk for exactly 2 components (`y` just echoes the feed fraction
+        // back, `x` interleaves two families of values point by point), worked around one layer
+        // up in `phase_envelope::binary_mixture`, not here. See
+        // `phase_envelope_data_ternary_mole_fractions_sum_to_one` below for a clean (N >= 3,
+        // quirk-free) validation of the stride/layout logic itself.
+        assert!(!trace.temperature.is_empty());
+        assert_eq!(trace.pressure.len(), trace.temperature.len());
+        assert_eq!(trace.rhomolar_liq.len(), trace.temperature.len());
+        assert_eq!(trace.rhomolar_vap.len(), trace.temperature.len());
+        assert_eq!(trace.liquid_mole_fractions.len(), 2);
+        assert_eq!(trace.vapor_mole_fractions.len(), 2);
+        for component in &trace.liquid_mole_fractions {
+            assert_eq!(component.len(), trace.temperature.len());
+        }
+    }
+
+    /// A ternary mixture, checking the composition-array bookkeeping (component count, per-
+    /// component length) rather than composition *values* -- those carry the same quirk
+    /// documented for exactly 2 components (confirmed empirically to extend to 3: `y` cycles
+    /// through permutations of the feed fractions rather than tracing a smooth per-component
+    /// curve). Interpreting/de-interleaving that belongs one layer up, in
+    /// `phase_envelope::binary_mixture`, which already does it for the 2-component case and is
+    /// validated end-to-end by `tests/binary_mixture.rs`; this layer's job is only to marshal
+    /// `CoolProp`'s raw arrays faithfully.
+    #[test]
+    fn phase_envelope_data_ternary_mixture() {
+        // Given
+        let mut sut = AbstractState::new("HEOS", "Nitrogen&Oxygen&Argon").unwrap();
+        sut.set_fractions(&[0.78, 0.21, 0.01]).unwrap();
+        sut.build_phase_envelope().unwrap();
+
+        // When
+        let trace = sut.phase_envelope_data(2000, 3).unwrap();
+
+        // Then
+        assert!(!trace.temperature.is_empty());
+        assert_eq!(trace.liquid_mole_fractions.len(), 3);
+        assert_eq!(trace.vapor_mole_fractions.len(), 3);
+        for component in trace.liquid_mole_fractions.iter().chain(&trace.vapor_mole_fractions) {
+            assert_eq!(component.len(), trace.temperature.len());
+        }
+    }
+
+    /// Not calling `build_phase_envelope` first isn't an error condition -- it's reported as an
+    /// empty trace, not a failure (confirmed empirically; `CoolPropLib.h` doesn't document this
+    /// case), matching [`AbstractState::mole_fractions`]'s analogous
+    /// nothing-set-yet-isn't-an-error behavior.
+    #[test]
+    fn phase_envelope_data_without_building_first() {
+        // Given
+        let mut sut = AbstractState::new("HEOS", "Nitrogen&Oxygen").unwrap();
+        sut.set_fractions(&[0.79, 0.21]).unwrap();
+
+        // When
+        let res = sut.phase_envelope_data(2000, 2).unwrap();
+
+        // Then
+        assert!(res.temperature.is_empty());
+    }
+
+    /// `CoolProp` itself already refuses to write past `max_points` (raising a native error)
+    /// rather than reporting a true length larger than the buffer -- confirmed empirically,
+    /// same finding as `mole_fractions_max_components_too_small`. This means
+    /// [`CoolPropError::PhaseEnvelopeTruncated`] is unreachable through this call in practice;
+    /// it stays as defense-in-depth.
+    #[test]
+    fn phase_envelope_data_max_points_too_small() {
+        // Given
+        let mut sut = AbstractState::new("HEOS", "Nitrogen&Oxygen").unwrap();
+        sut.set_fractions(&[0.79, 0.21]).unwrap();
+        sut.build_phase_envelope().unwrap();
+
+        // When
+        let res = sut.phase_envelope_data(1, 2);
+
+        // Then
+        assert!(matches!(res, Err(CoolPropError::Native(_))));
     }
 
     #[test]

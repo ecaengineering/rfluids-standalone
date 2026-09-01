@@ -8,6 +8,7 @@ use super::{
 };
 use crate::{
     io::{FluidInput, FluidTrivialParam, Phase},
+    native::PhaseEnvelopeData,
     ops::mul,
     state_variant::StateVariant,
     substance::{BinaryMix, CustomMix, Pure, Substance},
@@ -33,6 +34,118 @@ impl<S: StateVariant> Fluid<S> {
     #[must_use]
     pub fn specified_phase(&self) -> Phase {
         self.specified_phase
+    }
+
+    /// Sets one binary interaction parameter for the `(i, j)` component pair, and returns a
+    /// mutable reference to itself.
+    ///
+    /// # Arguments
+    ///
+    /// - `i`, `j` -- 0-based component indices (`i < j`), in this fluid's fixed component order
+    /// - `parameter` -- parameter name, e.g. `"betaT"`, `"gammaT"`, `"betaV"`, or `"gammaV"`
+    /// - `value` -- the parameter's new value
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FluidStateError::UpdateFailed`] for an invalid index or parameter name.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rfluids::prelude::*;
+    ///
+    /// let mut mixture: Fluid<Undefined> =
+    ///     CustomMix::mole_based([(Pure::Nitrogen, 0.79), (Pure::Oxygen, 0.21)])?.try_into()?;
+    /// let res = mixture.set_binary_interaction_double(0, 1, "betaT", 0.999_5);
+    /// assert!(res.is_ok());
+    /// # Ok::<(), rfluids::Error>(())
+    /// ```
+    pub fn set_binary_interaction_double(
+        &mut self,
+        i: usize,
+        j: usize,
+        parameter: impl AsRef<str>,
+        value: f64,
+    ) -> StateResult<&mut Self> {
+        self.backend.set_binary_interaction_double(i, j, parameter, value)?;
+        self.outputs.clear();
+        self.trivial_outputs.clear();
+        Ok(self)
+    }
+
+    /// Builds this fluid's phase envelope: the two-phase vapor-liquid-equilibrium boundary for
+    /// the currently set fixed composition. Returns a mutable reference to itself.
+    ///
+    /// Call once, after fractions and any
+    /// [`set_binary_interaction_double`](Self::set_binary_interaction_double) calls, before
+    /// [`phase_envelope_data`](Self::phase_envelope_data).
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FluidStateError::UpdateFailed`] if `CoolProp` can't trace it for this
+    /// composition.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rfluids::prelude::*;
+    ///
+    /// let mut mixture: Fluid<Undefined> =
+    ///     CustomMix::mole_based([(Pure::Nitrogen, 0.79), (Pure::Oxygen, 0.21)])?.try_into()?;
+    /// let res = mixture.build_phase_envelope();
+    /// assert!(res.is_ok());
+    /// # Ok::<(), rfluids::Error>(())
+    /// ```
+    ///
+    /// # See Also
+    ///
+    /// - [`Fluid::phase_envelope_data`]
+    pub fn build_phase_envelope(&mut self) -> StateResult<&mut Self> {
+        self.backend.build_phase_envelope()?;
+        Ok(self)
+    }
+
+    /// Reads back the phase envelope built by
+    /// [`build_phase_envelope`](Self::build_phase_envelope).
+    ///
+    /// # Arguments
+    ///
+    /// - `max_points` -- capacity of the per-property read-back buffer (temperature, pressure,
+    ///   densities, compositions); pass a generous estimate above any trace length expected in
+    ///   practice (a few hundred points is typical)
+    /// - `max_components` -- capacity for the composition arrays; pass the actual expected
+    ///   component count if known (e.g. a [`CustomMix`]'s)
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FluidOutputError::PhaseEnvelopeUnavailable`] if `CoolProp` cannot report the
+    /// trace, if the trace filled the entire `max_points` capacity, or if it reports more
+    /// components than `max_components` can hold.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rfluids::prelude::*;
+    ///
+    /// let mut mixture: Fluid<Undefined> =
+    ///     CustomMix::mole_based([(Pure::Nitrogen, 0.79), (Pure::Oxygen, 0.21)])?.try_into()?;
+    /// mixture.build_phase_envelope()?;
+    /// let trace = mixture.phase_envelope_data(2000, 2)?;
+    /// assert!(!trace.temperature.is_empty());
+    /// # Ok::<(), rfluids::Error>(())
+    /// ```
+    ///
+    /// # See Also
+    ///
+    /// - [`Fluid::build_phase_envelope`]
+    pub fn phase_envelope_data(
+        &mut self,
+        max_points: usize,
+        max_components: usize,
+    ) -> OutputResult<PhaseEnvelopeData> {
+        self.backend
+            .phase_envelope_data(max_points, max_components)
+            .map_err(FluidOutputError::PhaseEnvelopeUnavailable)
     }
 
     /// Acentric factor **\[dimensionless\]**.
