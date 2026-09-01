@@ -1,12 +1,15 @@
 // cSpell:disable
 
+use std::collections::HashMap;
+
 use super::{
-    Fluid, FluidOutputError, FluidPhaseError, OutputResult, StateResult,
+    Fluid, FluidOutputError, FluidPhaseError, FluidStateError, OutputResult, StateResult,
     common::{cached_output, guard},
 };
 use crate::{
     io::{FluidInput, FluidParam, Phase},
     ops::div,
+    substance::{CustomMix, Pure, Substance},
 };
 
 impl Fluid {
@@ -659,6 +662,110 @@ impl Fluid {
         Ok(self)
     }
 
+    /// Updates a [`CustomMix`](crate::substance::CustomMix)-backed fluid's mole fractions in
+    /// place, keeping its components (and the underlying `CoolProp` backend) otherwise
+    /// unchanged, and returns a mutable reference to itself.
+    ///
+    /// `components` must specify the same [`Pure`](crate::substance::Pure) set as the current
+    /// substance -- only the fractions may change. To change the components themselves
+    /// (add/remove a component, or switch substance/mixture kind), build a new [`Fluid`]
+    /// instead.
+    ///
+    /// This only updates the composition -- the thermodynamic state is left as-is, so call
+    /// [`Fluid::update`] afterward to (re)compute it for the new composition.
+    ///
+    /// # Arguments
+    ///
+    /// - `components` -- new components and their _mole_ fractions
+    ///   **\[dimensionless, from 0 to 1\]**
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FluidStateError`](crate::fluid::FluidStateError)`::InvalidFractions` if
+    /// `components` don't form a valid [`CustomMix`](crate::substance::CustomMix) (see
+    /// [`CustomMix::mole_based`](crate::substance::CustomMix::mole_based)),
+    /// `::IncompatibleComponents` if `components` don't match the current substance's (it isn't a
+    /// [`CustomMix`](crate::substance::CustomMix), or specifies different components), or
+    /// `::UpdateFailed` if `CoolProp` rejects the new fractions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rfluids::prelude::*;
+    ///
+    /// let mut mix: Fluid = Fluid::try_from(CustomMix::mole_based([
+    ///     (Pure::Methane, 0.5),
+    ///     (Pure::Ethane, 0.4),
+    ///     (Pure::nPropane, 0.1),
+    /// ])?)?
+    /// .in_state(FluidInput::pressure(200e3), FluidInput::temperature(277.15))?;
+    ///
+    /// mix.update_mole_fractions([
+    ///     (Pure::Methane, 0.5),
+    ///     (Pure::Ethane, 0.1),
+    ///     (Pure::nPropane, 0.4),
+    /// ])?
+    /// .update(FluidInput::pressure(200e3), FluidInput::temperature(277.15))?;
+    /// # Ok::<(), rfluids::Error>(())
+    /// ```
+    ///
+    /// # See Also
+    ///
+    /// - [`Fluid::update`]
+    /// - [`Fluid::update_fraction`]
+    pub fn update_mole_fractions(
+        &mut self,
+        components: impl Into<HashMap<Pure, f64>>,
+    ) -> StateResult<&mut Self> {
+        self.inner_update_mole_fractions(CustomMix::mole_based(components)?)?;
+        Ok(self)
+    }
+
+    /// Updates a [`BinaryMix`](crate::substance::BinaryMix)-backed fluid's fraction in place,
+    /// keeping its kind (and the underlying `CoolProp` backend) otherwise unchanged, and returns
+    /// a mutable reference to itself.
+    ///
+    /// This only updates the composition -- the thermodynamic state is left as-is, so call
+    /// [`Fluid::update`] afterward to (re)compute it for the new composition.
+    ///
+    /// # Arguments
+    ///
+    /// - `fraction` -- new fraction **\[dimensionless, from 0 to 1\]**
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FluidStateError`](crate::fluid::FluidStateError)`::InvalidFraction` if
+    /// `fraction` is out of the current [`BinaryMixKind`](crate::substance::BinaryMixKind)'s
+    /// valid range, `::IncompatibleComponents` if the current substance isn't a
+    /// [`BinaryMix`](crate::substance::BinaryMix), or `::UpdateFailed` if `CoolProp` rejects the
+    /// new fraction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rfluids::prelude::*;
+    ///
+    /// let mut pg: Fluid = Fluid::from(BinaryMixKind::MPG.with_fraction(0.4)?)
+    ///     .in_state(FluidInput::pressure(101_325.0), FluidInput::temperature(293.15))?;
+    ///
+    /// pg.update_fraction(0.5)?
+    ///     .update(FluidInput::pressure(101_325.0), FluidInput::temperature(293.15))?;
+    /// # Ok::<(), rfluids::Error>(())
+    /// ```
+    ///
+    /// # See Also
+    ///
+    /// - [`Fluid::update`]
+    /// - [`Fluid::update_mole_fractions`]
+    pub fn update_fraction(&mut self, fraction: f64) -> StateResult<&mut Self> {
+        let Substance::BinaryMix(current) = &self.substance else {
+            return Err(FluidStateError::IncompatibleComponents);
+        };
+        let mix = current.kind.with_fraction(fraction)?;
+        self.inner_update_fraction(mix)?;
+        Ok(self)
+    }
+
     /// Returns a new instance in the specified thermodynamic state.
     ///
     /// # Arguments
@@ -1292,5 +1399,150 @@ mod tests {
         assert_eq!(clone, sut);
         assert_eq!(clone.outputs, sut.outputs);
         assert_eq!(clone.trivial_outputs, sut.trivial_outputs);
+    }
+
+    #[rstest]
+    fn update_mole_fractions_reweight(ctx: Context) {
+        // Given
+        let feed = CustomMix::mole_based([
+            (Pure::Methane, 0.5),
+            (Pure::Ethane, 0.4),
+            (Pure::nPropane, 0.1),
+        ])
+        .unwrap();
+        let mut sut = ctx.sut(feed);
+        let expected = Substance::from(
+            CustomMix::mole_based([
+                (Pure::Methane, 0.5),
+                (Pure::Ethane, 0.1),
+                (Pure::nPropane, 0.4),
+            ])
+            .unwrap(),
+        );
+
+        // When
+        let res = sut.update_mole_fractions([
+            (Pure::Methane, 0.5),
+            (Pure::Ethane, 0.1),
+            (Pure::nPropane, 0.4),
+        ]);
+
+        // Then
+        assert!(res.is_ok());
+        assert_eq!(sut.substance(), &expected);
+    }
+
+    #[rstest]
+    fn update_mole_fractions_mass_based_current(ctx: Context) {
+        // Given
+        // A mass-based *current* substance means the backend's fixed fraction order can't be
+        // recovered from the stored `HashMap` alone -- it must be recomputed deterministically.
+        let feed = CustomMix::mass_based([(Pure::Methane, 0.5), (Pure::Ethane, 0.5)]).unwrap();
+        let mut sut = ctx.sut(feed);
+
+        // When
+        let res = sut.update_mole_fractions([(Pure::Methane, 0.2), (Pure::Ethane, 0.8)]);
+
+        // Then
+        assert!(res.is_ok());
+    }
+
+    #[rstest]
+    fn update_mole_fractions_clears_cached_outputs(ctx: Context) {
+        // Given
+        let feed = CustomMix::mole_based([(Pure::Methane, 0.5), (Pure::Ethane, 0.5)]).unwrap();
+        let mut sut = ctx.sut(feed);
+        sut.molar_mass().unwrap();
+        assert!(!sut.trivial_outputs.is_empty());
+
+        // When
+        sut.update_mole_fractions([(Pure::Methane, 0.2), (Pure::Ethane, 0.8)]).unwrap();
+
+        // Then
+        assert!(sut.outputs.is_empty());
+        assert!(sut.trivial_outputs.is_empty());
+    }
+
+    #[rstest]
+    fn update_mole_fractions_invalid_fractions(ctx: Context) {
+        // Given
+        let feed = CustomMix::mole_based([(Pure::Methane, 0.5), (Pure::Ethane, 0.5)]).unwrap();
+        let mut sut = ctx.sut(feed);
+
+        // When
+        let res = sut.update_mole_fractions([(Pure::Methane, 0.5), (Pure::Ethane, 0.4)]);
+
+        // Then
+        assert!(matches!(res, Err(FluidStateError::InvalidFractions(_))));
+    }
+
+    #[rstest]
+    fn update_mole_fractions_mismatched_components(ctx: Context) {
+        // Given
+        let feed = CustomMix::mole_based([(Pure::Methane, 0.5), (Pure::Ethane, 0.5)]).unwrap();
+        let mut sut = ctx.sut(feed);
+
+        // When
+        let res = sut.update_mole_fractions([(Pure::Methane, 0.5), (Pure::nPropane, 0.5)]);
+
+        // Then
+        assert!(matches!(res, Err(FluidStateError::IncompatibleComponents)));
+    }
+
+    #[rstest]
+    fn update_mole_fractions_wrong_substance_kind(ctx: Context) {
+        // Given
+        let Context { water, .. } = ctx;
+        let mut sut = ctx.sut(water);
+
+        // When
+        let res = sut.update_mole_fractions([(Pure::Methane, 0.5), (Pure::Ethane, 0.5)]);
+
+        // Then
+        assert!(matches!(res, Err(FluidStateError::IncompatibleComponents)));
+    }
+
+    #[rstest]
+    fn update_fraction_binary_mix(ctx: Context) {
+        // Given
+        let Context { pg, .. } = ctx;
+        let mut sut = ctx.sut(pg);
+
+        // When
+        let res = sut.update_fraction(0.5);
+
+        // Then
+        assert!(res.is_ok());
+        assert_eq!(
+            sut.substance(),
+            &Substance::from(BinaryMixKind::MPG.with_fraction(0.5).unwrap())
+        );
+    }
+
+    #[rstest]
+    fn update_fraction_out_of_range(ctx: Context) {
+        // Given
+        let Context { pg, .. } = ctx;
+        let mut sut = ctx.sut(pg);
+        let out_of_range = pg.kind.max_fraction() + 1e-3;
+
+        // When
+        let res = sut.update_fraction(out_of_range);
+
+        // Then
+        assert!(matches!(res, Err(FluidStateError::InvalidFraction(_))));
+    }
+
+    #[rstest]
+    fn update_fraction_wrong_substance_kind(ctx: Context) {
+        // Given
+        let Context { water, .. } = ctx;
+        let mut sut = ctx.sut(water);
+
+        // When
+        let res = sut.update_fraction(0.5);
+
+        // Then
+        assert!(matches!(res, Err(FluidStateError::IncompatibleComponents)));
     }
 }
