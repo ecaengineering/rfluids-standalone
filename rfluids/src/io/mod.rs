@@ -16,6 +16,7 @@
 //! - [`HumidAirParam`] -- humid air parameters
 //! - [`HumidAirInput`] -- humid air input parameter with specified value
 //! - [`Phase`] -- phase state of the fluid
+//! - [`SaturatedState`] -- which side of a two-phase equilibrium state's saturation dome to read
 //! - [`ConfigKey`] -- `CoolProp` configuration keys (e.g., `ENABLE_SUPERANCILLARIES`,
 //!   `CRITICAL_SPLINES_ENABLED`, etc.)
 //! - [`ConfigValue`] -- `CoolProp` configuration value (boolean, float, or string)
@@ -33,6 +34,7 @@ mod humid_air_input;
 mod humid_air_param;
 mod input;
 mod phase;
+mod saturated_state;
 mod substance_param;
 
 pub use config::*;
@@ -44,6 +46,7 @@ pub use humid_air_input::*;
 pub use humid_air_param::*;
 pub use input::*;
 pub use phase::*;
+pub use saturated_state::*;
 pub use substance_param::*;
 
 pub(crate) fn try_from<T: TryFrom<u8, Error = strum::ParseError>>(

@@ -221,10 +221,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        fluid::{FluidStateError, backend::BaseBackend},
+        fluid::{FluidOutputError, FluidStateError, backend::BaseBackend},
         native::CoolPropError,
         substance::*,
-        test::{SutFactory, test_output},
+        test::{SutFactory, assert_relative_eq, test_output},
     };
 
     struct Context {
@@ -280,6 +280,36 @@ mod tests {
     test_output!(min_pressure, water: 611.654_800_896_868_4, incomp_water: Err);
     test_output!(min_temperature, water: 273.16, always_ok);
     test_output!(molar_mass, water: 0.018_015_268, incomp_water: Err);
+
+    #[rstest]
+    fn mole_fractions(ctx: Context) {
+        // Given
+        let feed = CustomMix::mole_based([(Pure::Water, 0.8), (Pure::Ethanol, 0.2)]).unwrap();
+        let mut sut = ctx.sut(feed);
+
+        // When
+        let res = sut.mole_fractions();
+
+        // Then
+        let fractions = res.unwrap();
+        assert_eq!(fractions.len(), 2);
+        assert_relative_eq!(fractions[&Pure::Water], 0.8);
+        assert_relative_eq!(fractions[&Pure::Ethanol], 0.2);
+    }
+
+    #[rstest]
+    fn mole_fractions_not_a_custom_mix(ctx: Context) {
+        // Given
+        let Context { water, .. } = ctx;
+        let mut sut = ctx.sut(water);
+
+        // When
+        let res = sut.mole_fractions();
+
+        // Then
+        assert_eq!(res, Err(FluidOutputError::NotACustomMix));
+    }
+
     test_output!(odp, r22: 0.05, water: Err, incomp_water: Err);
     test_output!(physical_hazard, water: 0.0, incomp_water: Err);
     test_output!(reducing_density, water: 322.0, incomp_water: Err);

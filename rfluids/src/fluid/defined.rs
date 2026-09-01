@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use super::{
     Fluid, FluidOutputError, FluidPhaseError, FluidStateError, OutputResult, StateResult,
     common::{cached_output, guard},
+    invariant::{custom_mix_component_order, zip_component_order},
 };
 use crate::{
     io::{FluidInput, FluidParam, Phase},
@@ -766,6 +767,61 @@ impl Fluid {
         Ok(self)
     }
 
+    /// Mole fractions **\[dimensionless, from 0 to 1 each\]** of one side of the current
+    /// two-phase equilibrium state, keyed by component.
+    ///
+    /// Only available for [`CustomMix`](crate::substance::CustomMix)-backed fluids -- see
+    /// [`Fluid::mole_fractions`](crate::fluid::Fluid::mole_fractions) for why.
+    ///
+    /// # Arguments
+    ///
+    /// - `saturated_state` -- which side of the saturation dome to read _(raw [`&str`](str) or
+    ///   [`SaturatedState`](crate::io::SaturatedState))_
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FluidOutputError::NotACustomMix`] if the current substance isn't a
+    /// [`CustomMix`](crate::substance::CustomMix), or [`FluidOutputError::CompositionUnavailable`]
+    /// if the current state isn't two-phase, or `CoolProp` otherwise cannot report the
+    /// composition.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rfluids::prelude::*;
+    ///
+    /// let mut mixture: Fluid = Fluid::try_from(CustomMix::mole_based([
+    ///     (Pure::CarbonDioxide, 0.1),
+    ///     (Pure::Water, 0.9),
+    /// ])?)?
+    /// .in_state(FluidInput::pressure(2e6), FluidInput::temperature(320.0))?;
+    ///
+    /// assert_eq!(mixture.phase(), Phase::TwoPhase);
+    /// let liquid = mixture.mole_fractions_sat_state(SaturatedState::Liquid)?;
+    /// let gas = mixture.mole_fractions_sat_state(SaturatedState::Gas)?;
+    /// // The gas side is enriched in carbon dioxide, the liquid side in water.
+    /// assert!(gas[&Pure::CarbonDioxide] > liquid[&Pure::CarbonDioxide]);
+    /// assert!(liquid[&Pure::Water] > gas[&Pure::Water]);
+    /// # Ok::<(), rfluids::Error>(())
+    /// ```
+    ///
+    /// # See Also
+    ///
+    /// - [`SaturatedState`](crate::io::SaturatedState)
+    /// - [`Fluid::mole_fractions`](crate::fluid::Fluid::mole_fractions)
+    pub fn mole_fractions_sat_state(
+        &mut self,
+        saturated_state: impl AsRef<str>,
+    ) -> OutputResult<HashMap<Pure, f64>> {
+        let order =
+            custom_mix_component_order(&self.substance).ok_or(FluidOutputError::NotACustomMix)?;
+        let raw = self
+            .backend
+            .mole_fractions_sat_state(saturated_state, order.len())
+            .map_err(FluidOutputError::CompositionUnavailable)?;
+        Ok(zip_component_order(order, raw))
+    }
+
     /// Returns a new instance in the specified thermodynamic state.
     ///
     /// # Arguments
@@ -876,6 +932,7 @@ mod tests {
     use crate::{
         Undefined,
         fluid::FluidStateError,
+        io::SaturatedState,
         native::CoolPropError,
         substance::*,
         test::{SutFactory, assert_relative_eq, test_output},
@@ -1544,5 +1601,90 @@ mod tests {
 
         // Then
         assert!(matches!(res, Err(FluidStateError::IncompatibleComponents)));
+    }
+
+    #[rstest]
+    fn mole_fractions(ctx: Context) {
+        // Given
+        let feed = CustomMix::mole_based([(Pure::Water, 0.8), (Pure::Ethanol, 0.2)]).unwrap();
+        let mut sut = ctx.sut(feed);
+
+        // When
+        let res = sut.mole_fractions();
+
+        // Then
+        let fractions = res.unwrap();
+        assert_eq!(fractions.len(), 2);
+        assert_relative_eq!(fractions[&Pure::Water], 0.8);
+        assert_relative_eq!(fractions[&Pure::Ethanol], 0.2);
+    }
+
+    #[rstest]
+    fn mole_fractions_not_a_custom_mix(ctx: Context) {
+        // Given
+        let Context { water, .. } = ctx;
+        let mut sut = ctx.sut(water);
+
+        // When
+        let res = sut.mole_fractions();
+
+        // Then
+        assert_eq!(res, Err(FluidOutputError::NotACustomMix));
+    }
+
+    /// Pins down `mole_fractions_sat_state` against a known two-phase CO2-Water point: `"liquid"`
+    /// and `"gas"` are both accepted and return the physically-expected split.
+    #[rstest]
+    fn mole_fractions_sat_state_liquid_and_gas_split_a_known_two_phase_point() {
+        // Given
+        let feed = CustomMix::mole_based([(Pure::CarbonDioxide, 0.1), (Pure::Water, 0.9)]).unwrap();
+        let mut sut = Fluid::try_from(feed)
+            .unwrap()
+            .in_state(FluidInput::pressure(2e6), FluidInput::temperature(320.0))
+            .unwrap();
+        assert_eq!(sut.phase(), Phase::TwoPhase);
+
+        // When
+        let liquid = sut.mole_fractions_sat_state(SaturatedState::Liquid);
+        let gas = sut.mole_fractions_sat_state(SaturatedState::Gas);
+
+        // Then
+        let liquid = liquid.unwrap();
+        let gas = gas.unwrap();
+        assert_eq!(liquid.len(), 2);
+        assert_eq!(gas.len(), 2);
+        // The gas side is enriched in CO2, the liquid side in water.
+        assert!(gas[&Pure::CarbonDioxide] > liquid[&Pure::CarbonDioxide]);
+        assert!(liquid[&Pure::Water] > gas[&Pure::Water]);
+    }
+
+    #[rstest]
+    fn mole_fractions_sat_state_single_phase_state() {
+        // Given
+        let feed = CustomMix::mole_based([(Pure::CarbonDioxide, 0.1), (Pure::Water, 0.9)]).unwrap();
+        let mut sut = Fluid::try_from(feed)
+            .unwrap()
+            .in_state(FluidInput::pressure(1e4), FluidInput::temperature(500.0))
+            .unwrap();
+        assert_ne!(sut.phase(), Phase::TwoPhase);
+
+        // When
+        let res = sut.mole_fractions_sat_state(SaturatedState::Liquid);
+
+        // Then
+        assert!(matches!(res, Err(FluidOutputError::CompositionUnavailable(_))));
+    }
+
+    #[rstest]
+    fn mole_fractions_sat_state_not_a_custom_mix(ctx: Context) {
+        // Given
+        let Context { water, .. } = ctx;
+        let mut sut = ctx.sut(water);
+
+        // When
+        let res = sut.mole_fractions_sat_state(SaturatedState::Liquid);
+
+        // Then
+        assert_eq!(res, Err(FluidOutputError::NotACustomMix));
     }
 }

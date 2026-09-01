@@ -5,7 +5,7 @@ pub use crate::{
     humid_air::HumidAir,
     io::{
         ConfigKey, ConfigValue, FluidInput, FluidInputPair, FluidParam, FluidTrivialParam,
-        GlobalParam, HumidAirInput, Input, Phase, SubstanceParam,
+        GlobalParam, HumidAirInput, Input, Phase, SaturatedState, SubstanceParam,
     },
     native::{AbstractState, CoolProp},
     state_variant::*,

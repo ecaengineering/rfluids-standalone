@@ -16,7 +16,7 @@ mod low_level_api;
 mod utils;
 
 pub use high_level_api::CoolProp;
-pub use low_level_api::AbstractState;
+pub use low_level_api::{AbstractState, MAX_COMPONENTS};
 
 /// `CoolProp` error.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
@@ -47,6 +47,22 @@ pub enum CoolPropError {
         arg: &'static str,
         /// Byte position of the interior NUL byte.
         pos: usize,
+    },
+
+    /// `CoolProp` reported more components than a fixed-capacity read-back buffer can hold
+    /// (e.g. [`AbstractState::mole_fractions`]).
+    ///
+    /// Defense-in-depth: `CoolProp` itself already refuses to write past the buffer, raising
+    /// a [`CoolPropError::Native`] instead of reporting a count larger than it (confirmed
+    /// empirically for `HEOS`) -- this variant guards against a backend that might not.
+    #[error(
+        "CoolProp reported {reported} component(s), exceeding this call's {capacity}-component buffer"
+    )]
+    TooManyComponents {
+        /// Number of components `CoolProp` reported.
+        reported: usize,
+        /// Maximum number of components this call could read back.
+        capacity: usize,
     },
 }
 
