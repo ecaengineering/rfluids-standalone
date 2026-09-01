@@ -1,5 +1,5 @@
 use super::{
-    Fluid, FluidOutputError, FluidPhaseError, OutputResult, StateResult,
+    Fluid, FluidOutputError, FluidPhaseError, FluidStateError, OutputResult, StateResult,
     backend::Backend,
     common::{cached_output, guard},
     request::FluidUpdateRequest,
@@ -8,7 +8,7 @@ use crate::{
     io::{FluidInput, FluidTrivialParam, Phase},
     ops::mul,
     state_variant::StateVariant,
-    substance::Substance,
+    substance::{BinaryMix, CustomMix, Substance},
 };
 
 impl<S: StateVariant> Fluid<S> {
@@ -287,6 +287,60 @@ impl<S: StateVariant> Fluid<S> {
         self.outputs.insert(input1.key, Ok(input1.value));
         self.outputs.insert(input2.key, Ok(input2.value));
         self.update_request = Some(request);
+        Ok(())
+    }
+
+    /// Updates a [`CustomMix`](crate::substance::CustomMix)-backed fluid's mole fractions in
+    /// place, keeping its components (and the underlying `CoolProp` backend) otherwise
+    /// unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FluidStateError::IncompatibleComponents`] if the current substance isn't a
+    /// [`CustomMix`](crate::substance::CustomMix) with the same components as `components`.
+    pub(crate) fn inner_update_mole_fractions(&mut self, components: CustomMix) -> StateResult<()> {
+        let Substance::CustomMix(current) = &self.substance else {
+            return Err(FluidStateError::IncompatibleComponents);
+        };
+        let current = current.clone().into_mole_based();
+        let new = components.into_mole_based();
+        let new_components = new.components();
+        if new_components.len() != current.components().len() {
+            return Err(FluidStateError::IncompatibleComponents);
+        }
+        let fractions = current
+            .sorted_by_name()
+            .into_iter()
+            .map(|(pure, _)| {
+                new_components.get(&pure).copied().ok_or(FluidStateError::IncompatibleComponents)
+            })
+            .collect::<Result<Vec<f64>, FluidStateError>>()?;
+        self.backend.set_fractions(&fractions)?;
+        self.substance = Substance::CustomMix(new);
+        self.outputs.clear();
+        self.trivial_outputs.clear();
+        Ok(())
+    }
+
+    /// Updates a [`BinaryMix`](crate::substance::BinaryMix)-backed fluid's fraction in place,
+    /// keeping its kind (and the underlying `CoolProp` backend) otherwise unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FluidStateError::IncompatibleComponents`] if the current substance isn't a
+    /// [`BinaryMix`](crate::substance::BinaryMix) of the same
+    /// [`kind`](crate::substance::BinaryMix::kind) as `mix`.
+    pub(crate) fn inner_update_fraction(&mut self, mix: BinaryMix) -> StateResult<()> {
+        let Substance::BinaryMix(current) = &self.substance else {
+            return Err(FluidStateError::IncompatibleComponents);
+        };
+        if current.kind != mix.kind {
+            return Err(FluidStateError::IncompatibleComponents);
+        }
+        self.backend.set_fractions(&[mix.fraction])?;
+        self.substance = Substance::BinaryMix(mix);
+        self.outputs.clear();
+        self.trivial_outputs.clear();
         Ok(())
     }
 

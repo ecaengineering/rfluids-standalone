@@ -113,6 +113,23 @@ impl CustomMix {
         }
     }
 
+    /// Component/fraction pairs, sorted by component name.
+    ///
+    /// Iterating [`components`](Self::components) directly walks a
+    /// [`HashMap`], whose order is randomized per process and not reproducible across
+    /// separate `CustomMix` instances that happen to hold the same components (e.g. after a
+    /// round trip through [`into_mole_based`](Self::into_mole_based), which rebuilds the map).
+    /// This order instead depends only on the component names, so it is stable for as long as
+    /// the component set doesn't change -- in particular, it stays fixed when only fractions
+    /// change, which is what a `CoolProp` backend's fraction array requires
+    /// (its positions are fixed at construction; only the values can be updated afterward).
+    pub(crate) fn sorted_by_name(&self) -> Vec<(Pure, f64)> {
+        let mut components: Vec<(Pure, f64)> =
+            self.components().iter().map(|(&pure, &fraction)| (pure, fraction)).collect();
+        components.sort_unstable_by_key(|(pure, _)| <&'static str>::from(*pure));
+        components
+    }
+
     fn validate(components: &HashMap<Pure, f64>) -> Result<(), CustomMixError> {
         if components.len() < 2 {
             return Err(CustomMixError::NotEnoughComponents);
@@ -229,6 +246,22 @@ mod tests {
             &res,
             [("R32", 0.697_614_699_375_862_4), ("R125", 0.302_385_300_624_137_54)]
         ));
+    }
+
+    #[test]
+    fn sorted_by_name_is_deterministic() {
+        // Given
+        let components = [(Pure::Water, 0.6), (Pure::Ethanol, 0.4)];
+        let sut1 = CustomMix::mole_based(components).unwrap();
+        let sut2 = CustomMix::mole_based(components).unwrap();
+
+        // When
+        let res1 = sut1.sorted_by_name();
+        let res2 = sut2.sorted_by_name();
+
+        // Then
+        assert_eq!(res1, [(Pure::Ethanol, 0.4), (Pure::Water, 0.6)]);
+        assert_eq!(res1, res2);
     }
 
     fn matches(mix: &CustomMix, expected: [(&str, f64); 2]) -> bool {

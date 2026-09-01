@@ -396,10 +396,13 @@ impl TryFrom<&SubstanceWithBackend> for AbstractState {
                 }
                 Substance::CustomMix(custom_mix) => {
                     let mix = custom_mix.clone().into_mole_based();
+                    // Sorted by name (not fraction) so this order stays fixed regardless of
+                    // composition -- required since `set_fractions` only overwrites values at
+                    // fixed positions, never reorders them.
                     let (components, fractions): (Vec<&str>, Vec<f64>) = mix
-                        .components()
-                        .iter()
-                        .map(|component| (component.0.as_ref(), component.1))
+                        .sorted_by_name()
+                        .into_iter()
+                        .map(|(pure, fraction)| (<&str>::from(pure), fraction))
                         .unzip();
                     (Cow::Owned(components.join("&")), Some(fractions))
                 }

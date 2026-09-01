@@ -34,7 +34,10 @@ use crate::{
     io::{FluidParam, FluidTrivialParam, Phase},
     native::{AbstractState, CoolPropError},
     state_variant::{Defined, StateVariant, Undefined},
-    substance::{BinaryMix, CustomMix, IncompPure, PredefinedMix, Pure, Substance},
+    substance::{
+        BinaryMix, BinaryMixError, CustomMix, CustomMixError, IncompPure, PredefinedMix, Pure,
+        Substance,
+    },
 };
 
 /// Result type for operations that could fail while updating fluid state.
@@ -247,8 +250,14 @@ pub enum FluidPhaseError {
     SpecifyFailed(#[from] CoolPropError),
 }
 
-/// Error during [`Fluid::update`] or [`Fluid::in_state`].
-#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+/// Error during [`Fluid::update`], [`Fluid::in_state`], [`Fluid::update_mole_fractions`], or
+/// [`Fluid::update_fraction`].
+///
+/// # Note
+///
+/// Doesn't derive `Eq` -- unlike the library's other error types -- because
+/// [`BinaryMixError`] carries `f64` fields.
+#[derive(Clone, Debug, PartialEq, thiserror::Error)]
 pub enum FluidStateError {
     /// Specified inputs are invalid.
     #[error("specified inputs (`{0:?}`, `{1:?}`) are invalid")]
@@ -261,6 +270,21 @@ pub enum FluidStateError {
     /// Failed to update the fluid state due to unsupported inputs or invalid state.
     #[error("failed to update the fluid state: {0}")]
     UpdateFailed(#[from] CoolPropError),
+
+    /// Specified components (or substance/mixture kind) don't match the current substance's for
+    /// a fractions-only update.
+    ///
+    /// Changing components requires building a new [`Fluid`] instead.
+    #[error("specified components are not compatible with the current substance")]
+    IncompatibleComponents,
+
+    /// Specified custom mixture fractions are invalid.
+    #[error("specified fractions are invalid: {0}")]
+    InvalidFractions(#[from] CustomMixError),
+
+    /// Specified binary mixture fraction is invalid.
+    #[error("specified fraction is invalid: {0}")]
+    InvalidFraction(#[from] BinaryMixError),
 }
 
 /// Error during calculation of the [`Fluid`] output parameter value.
