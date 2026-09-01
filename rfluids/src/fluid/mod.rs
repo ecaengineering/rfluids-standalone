@@ -301,6 +301,19 @@ pub enum FluidOutputError {
     /// Failed to calculate the output parameter value.
     #[error("failed to calculate the output value of `{0:?}`: {1}")]
     CalculationFailed(FluidParam, CoolPropError),
+
+    /// Failed to read the current mole-fraction composition.
+    #[error("failed to read the current composition: {0}")]
+    CompositionUnavailable(#[from] CoolPropError),
+
+    /// Requested a labeled composition for a substance that isn't a
+    /// [`CustomMix`](crate::substance::CustomMix).
+    ///
+    /// For any other substance, the composition is already fully described by
+    /// [`Fluid::substance`] (e.g. a single [`Pure`](crate::substance::Pure), or a
+    /// [`BinaryMix`](crate::substance::BinaryMix)'s already-labeled `fraction`).
+    #[error("labeled mole fractions are only available for CustomMix-backed fluids")]
+    NotACustomMix,
 }
 
 #[cfg(test)]

@@ -12,6 +12,16 @@ use super::{
 };
 use crate::substance::{Substance, SubstanceWithBackend};
 
+/// Default `max_components` for [`AbstractState::mole_fractions`] and
+/// [`AbstractState::mole_fractions_sat_state`], generous above any real-world mixture, for
+/// callers with no better estimate of the component count to pass.
+///
+/// `CoolProp`'s C API requires a caller-preallocated buffer sized up front (see
+/// `AbstractState_get_mole_fractions`'s `maxN`). Prefer passing the actual expected component
+/// count when it's known (e.g. from a [`Substance`]) -- it catches a mismatch as a normal
+/// [`CoolPropError::TooManyComponents`] instead of silently allocating more than needed.
+pub const MAX_COMPONENTS: usize = 64;
+
 /// `CoolProp` thread safe low-level API.
 #[derive(Debug)]
 pub struct AbstractState {
@@ -154,6 +164,129 @@ impl AbstractState {
             );
         });
         err_buffer.into_result()
+    }
+
+    /// Gets the current mole fractions **\[dimensionless, from 0 to 1 each\]**,
+    /// in this `AbstractState`'s fixed component order.
+    ///
+    /// # Arguments
+    ///
+    /// - `max_components` -- capacity of the read-back buffer. `CoolProp`'s C API requires this
+    ///   sized up front; pass the actual expected component count if known (e.g. a
+    ///   [`Substance`]'s), or [`MAX_COMPONENTS`] as a generous default otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CoolPropError`] if `CoolProp` cannot report the composition, or reports more
+    /// components than `max_components` can hold.
+    ///
+    /// Note that fractions never having been set isn't an error condition -- it's reported as
+    /// an empty vector, not a failure (confirmed empirically; `CoolPropLib.h` doesn't document
+    /// this case).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use approx::assert_relative_eq;
+    /// use rfluids::prelude::*;
+    ///
+    /// let mut mixture = AbstractState::new("HEOS", "Water&Ethanol")?;
+    /// mixture.set_fractions(&[0.8, 0.2])?;
+    /// let res = mixture.mole_fractions(2)?;
+    /// assert_relative_eq!(res.as_slice(), [0.8, 0.2].as_slice());
+    /// # Ok::<(), rfluids::native::CoolPropError>(())
+    /// ```
+    ///
+    /// # See Also
+    ///
+    /// - [`AbstractState::mole_fractions_sat_state`]
+    pub fn mole_fractions(&self, max_components: usize) -> Result<Vec<f64>> {
+        let mut err_buffer = ErrorBuffer::default();
+        let (err_code, err_message, err_buffer_capacity) = err_buffer.as_mut_parts();
+        let mut fractions = vec![0.0_f64; max_components];
+        let mut reported: c_long = 0;
+        let max_components_c_long =
+            c_long::try_from(max_components).expect("max_components must fit into `c_long`");
+        self.with_coolprop(|coolprop| unsafe {
+            coolprop.AbstractState_get_mole_fractions(
+                self.handle,
+                fractions.as_mut_ptr(),
+                max_components_c_long,
+                &raw mut reported,
+                err_code,
+                err_message,
+                err_buffer_capacity,
+            );
+        });
+        err_buffer.into_result()?;
+        truncated_to_reported_len(fractions, reported)
+    }
+
+    /// Gets the mole fractions **\[dimensionless, from 0 to 1 each\]** of one side of the
+    /// current two-phase equilibrium state, in this `AbstractState`'s fixed component order.
+    ///
+    /// # Arguments
+    ///
+    /// - `saturated_state` -- which side of the saturation dome to read _(raw [`&str`](str) or
+    ///   [`SaturatedState`](crate::io::SaturatedState))_
+    /// - `max_components` -- capacity of the read-back buffer. `CoolProp`'s C API requires this
+    ///   sized up front; pass the actual expected component count if known (e.g. a
+    ///   [`Substance`]'s), or [`MAX_COMPONENTS`] as a generous default otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CoolPropError`] if the current state isn't two-phase, if `CoolProp` cannot
+    /// otherwise report the composition, or if it reports more components than `max_components`
+    /// can hold.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rfluids::prelude::*;
+    ///
+    /// let mut mixture = AbstractState::new("HEOS", "CarbonDioxide&Water")?;
+    /// mixture.set_fractions(&[0.1, 0.9])?;
+    /// mixture.update(FluidInputPair::PT, 2e6, 320.0)?;
+    /// let liquid = mixture.mole_fractions_sat_state(SaturatedState::Liquid, 2)?;
+    /// let gas = mixture.mole_fractions_sat_state(SaturatedState::Gas, 2)?;
+    /// assert_eq!(liquid.len(), 2);
+    /// assert_eq!(gas.len(), 2);
+    /// // The gas side is enriched in `CarbonDioxide` (component `0`), the liquid side in
+    /// // `Water` (component `1`).
+    /// assert!(gas[0] > liquid[0]);
+    /// # Ok::<(), rfluids::native::CoolPropError>(())
+    /// ```
+    ///
+    /// # See Also
+    ///
+    /// - [`SaturatedState`](crate::io::SaturatedState)
+    /// - [`AbstractState::mole_fractions`]
+    pub fn mole_fractions_sat_state(
+        &self,
+        saturated_state: impl AsRef<str>,
+        max_components: usize,
+    ) -> Result<Vec<f64>> {
+        let saturated_state = c_string_trimmed("saturated_state", saturated_state)?;
+        let mut err_buffer = ErrorBuffer::default();
+        let (err_code, err_message, err_buffer_capacity) = err_buffer.as_mut_parts();
+        let mut fractions = vec![0.0_f64; max_components];
+        let mut reported: c_long = 0;
+        let max_components_c_long =
+            c_long::try_from(max_components).expect("max_components must fit into `c_long`");
+        self.with_coolprop(|coolprop| unsafe {
+            coolprop.AbstractState_get_mole_fractions_satState(
+                self.handle,
+                saturated_state.as_ptr(),
+                fractions.as_mut_ptr(),
+                max_components_c_long,
+                &raw mut reported,
+                err_code,
+                err_message,
+                err_buffer_capacity,
+            );
+        });
+        err_buffer.into_result()?;
+        truncated_to_reported_len(fractions, reported)
     }
 
     /// Update the state of the fluid.
@@ -380,6 +513,18 @@ impl AbstractState {
     }
 }
 
+/// Truncates a `mole_fractions`/`mole_fractions_sat_state` read-back buffer to `CoolProp`'s
+/// reported component count, or fails if that count exceeds the buffer's capacity.
+fn truncated_to_reported_len(mut fractions: Vec<f64>, reported: c_long) -> Result<Vec<f64>> {
+    let capacity = fractions.len();
+    let reported = usize::try_from(reported).unwrap_or(0);
+    if reported > capacity {
+        return Err(CoolPropError::TooManyComponents { reported, capacity });
+    }
+    fractions.truncate(reported);
+    Ok(fractions)
+}
+
 impl TryFrom<&SubstanceWithBackend> for AbstractState {
     type Error = CoolPropError;
 
@@ -438,7 +583,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        io::{FluidInputPair, FluidParam, Phase},
+        io::{FluidInputPair, FluidParam, Phase, SaturatedState},
         test::assert_relative_eq,
     };
 
@@ -716,6 +861,90 @@ mod tests {
                     .into()
             )
         );
+    }
+
+    #[test]
+    fn mole_fractions_round_trips_set_fractions() {
+        // Given
+        let mut sut = AbstractState::new("HEOS", "Water&Ethanol").unwrap();
+        sut.set_fractions(&[0.8, 0.2]).unwrap();
+
+        // When
+        let res = sut.mole_fractions(2).unwrap();
+
+        // Then
+        assert_relative_eq!(res.as_slice(), [0.8, 0.2].as_slice());
+    }
+
+    #[test]
+    fn mole_fractions_not_yet_set() {
+        // Given
+        let sut = AbstractState::new("HEOS", "Water&Ethanol").unwrap();
+
+        // When
+        let res = sut.mole_fractions(MAX_COMPONENTS);
+
+        // Then
+        assert_eq!(res, Ok(Vec::new()));
+    }
+
+    /// `CoolProp` itself already refuses to write past `maxN` (raising a native error) rather
+    /// than reporting a true count larger than the buffer -- confirmed empirically, since
+    /// `CoolPropLib.h` doesn't document this. This means [`CoolPropError::TooManyComponents`] is
+    /// unreachable through this call in practice; it stays as defense-in-depth against a
+    /// backend that might one day behave differently, rather than silently mis-truncating.
+    #[test]
+    fn mole_fractions_max_components_too_small() {
+        // Given
+        let mut sut = AbstractState::new("HEOS", "Water&Ethanol").unwrap();
+        sut.set_fractions(&[0.8, 0.2]).unwrap();
+
+        // When
+        let res = sut.mole_fractions(1);
+
+        // Then
+        assert!(matches!(res, Err(CoolPropError::Native(_))));
+    }
+
+    /// Pins down `AbstractState_get_mole_fractions_satState`'s undocumented
+    /// `saturated_state` argument against a known two-phase CO2-Water point:
+    /// `"liquid"` and `"gas"` are both accepted and return the physically-expected split, while
+    /// `"vapor"` -- a plausible-looking spelling for the gas side -- is rejected.
+    #[test]
+    fn mole_fractions_sat_state_liquid_and_gas_split_a_known_two_phase_point() {
+        // Given
+        let mut sut = AbstractState::new("HEOS", "CarbonDioxide&Water").unwrap();
+        sut.set_fractions(&[0.1, 0.9]).unwrap();
+        sut.update(FluidInputPair::PT, 2.0e6, 320.0).unwrap();
+
+        // When
+        let liquid = sut.mole_fractions_sat_state("liquid", 2).unwrap();
+        let gas = sut.mole_fractions_sat_state("gas", 2).unwrap();
+        let vapor = sut.mole_fractions_sat_state("vapor", 2);
+
+        // Then
+        assert_eq!(liquid.len(), 2);
+        assert_eq!(gas.len(), 2);
+        assert_relative_eq!(liquid.iter().sum::<f64>(), 1.0);
+        assert_relative_eq!(gas.iter().sum::<f64>(), 1.0);
+        // CO2 (component 0) is enriched in the gas side, water (component 1) in the liquid side.
+        assert!(gas[0] > liquid[0]);
+        assert!(liquid[1] > gas[1]);
+        assert!(vapor.is_err());
+    }
+
+    #[test]
+    fn mole_fractions_sat_state_single_phase_state() {
+        // Given
+        let mut sut = AbstractState::new("HEOS", "CarbonDioxide&Water").unwrap();
+        sut.set_fractions(&[0.1, 0.9]).unwrap();
+        sut.update(FluidInputPair::PT, 1e4, 500.0).unwrap();
+
+        // When
+        let res = sut.mole_fractions_sat_state(SaturatedState::Liquid, 2);
+
+        // Then
+        assert!(res.is_err());
     }
 
     #[test]

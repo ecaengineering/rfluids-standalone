@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::{
     Fluid, FluidOutputError, FluidPhaseError, FluidStateError, OutputResult, StateResult,
     backend::Backend,
@@ -8,7 +10,7 @@ use crate::{
     io::{FluidInput, FluidTrivialParam, Phase},
     ops::mul,
     state_variant::StateVariant,
-    substance::{BinaryMix, CustomMix, Substance},
+    substance::{BinaryMix, CustomMix, Pure, Substance},
 };
 
 impl<S: StateVariant> Fluid<S> {
@@ -189,6 +191,46 @@ impl<S: StateVariant> Fluid<S> {
         self.positive_trivial_output(FluidTrivialParam::MolarMass)
     }
 
+    /// Current mole fractions **\[dimensionless, from 0 to 1 each\]**, keyed by component.
+    ///
+    /// Only available for [`CustomMix`](crate::substance::CustomMix)-backed fluids -- for any
+    /// other substance, the composition is already fully described by
+    /// [`Fluid::substance`](crate::fluid::Fluid::substance) (e.g. a single
+    /// [`Pure`](crate::substance::Pure), or a [`BinaryMix`](crate::substance::BinaryMix)'s
+    /// already-labeled `fraction`), so there is no "which value is which" ambiguity to resolve.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FluidOutputError::NotACustomMix`] if the current substance isn't a
+    /// [`CustomMix`](crate::substance::CustomMix), or [`FluidOutputError::CompositionUnavailable`]
+    /// if `CoolProp` cannot otherwise report the composition.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rfluids::prelude::*;
+    ///
+    /// let mut mixture: Fluid<Undefined> =
+    ///     CustomMix::mole_based([(Pure::Water, 0.8), (Pure::Ethanol, 0.2)])?.try_into()?;
+    /// let res = mixture.mole_fractions()?;
+    /// assert_eq!(res[&Pure::Water], 0.8);
+    /// assert_eq!(res[&Pure::Ethanol], 0.2);
+    /// # Ok::<(), rfluids::Error>(())
+    /// ```
+    ///
+    /// # See Also
+    ///
+    /// - [`Fluid::mole_fractions_sat_state`](crate::fluid::Fluid::mole_fractions_sat_state)
+    pub fn mole_fractions(&mut self) -> OutputResult<HashMap<Pure, f64>> {
+        let order =
+            custom_mix_component_order(&self.substance).ok_or(FluidOutputError::NotACustomMix)?;
+        let raw = self
+            .backend
+            .mole_fractions(order.len())
+            .map_err(FluidOutputError::CompositionUnavailable)?;
+        Ok(zip_component_order(order, raw))
+    }
+
     /// Ozone depletion potential **\[dimensionless\]**.
     ///
     /// # Errors
@@ -299,20 +341,17 @@ impl<S: StateVariant> Fluid<S> {
     /// Returns [`FluidStateError::IncompatibleComponents`] if the current substance isn't a
     /// [`CustomMix`](crate::substance::CustomMix) with the same components as `components`.
     pub(crate) fn inner_update_mole_fractions(&mut self, components: CustomMix) -> StateResult<()> {
-        let Substance::CustomMix(current) = &self.substance else {
-            return Err(FluidStateError::IncompatibleComponents);
-        };
-        let current = current.clone().into_mole_based();
+        let current_order = custom_mix_component_order(&self.substance)
+            .ok_or(FluidStateError::IncompatibleComponents)?;
         let new = components.into_mole_based();
         let new_components = new.components();
-        if new_components.len() != current.components().len() {
+        if new_components.len() != current_order.len() {
             return Err(FluidStateError::IncompatibleComponents);
         }
-        let fractions = current
-            .sorted_by_name()
-            .into_iter()
-            .map(|(pure, _)| {
-                new_components.get(&pure).copied().ok_or(FluidStateError::IncompatibleComponents)
+        let fractions = current_order
+            .iter()
+            .map(|pure| {
+                new_components.get(pure).copied().ok_or(FluidStateError::IncompatibleComponents)
             })
             .collect::<Result<Vec<f64>, FluidStateError>>()?;
         self.backend.set_fractions(&fractions)?;
@@ -358,4 +397,38 @@ impl<S: StateVariant> Fluid<S> {
         })
         .and_then(|value| guard(key.into(), value, f64::is_finite))
     }
+}
+
+/// Ordered [`Pure`] components of `substance`, in the fixed order a `CoolProp` backend built
+/// from it would use (see [`CustomMix::sorted_by_name`]) -- `None` if `substance` isn't a
+/// [`CustomMix`].
+///
+/// Shared by [`Fluid::inner_update_mole_fractions`](Fluid::inner_update_mole_fractions),
+/// [`Fluid::mole_fractions`](crate::fluid::Fluid::mole_fractions), and
+/// [`Fluid::mole_fractions_sat_state`](crate::fluid::Fluid::mole_fractions_sat_state) so all
+/// three agree on the same order derived the same way.
+pub(crate) fn custom_mix_component_order(substance: &Substance) -> Option<Vec<Pure>> {
+    let Substance::CustomMix(mix) = substance else {
+        return None;
+    };
+    Some(mix.clone().into_mole_based().sorted_by_name().into_iter().map(|(pure, _)| pure).collect())
+}
+
+/// Pairs `order` (from [`custom_mix_component_order`]) positionally with a fraction vector
+/// `CoolProp` reported for that same order (e.g. from
+/// [`AbstractState::mole_fractions`](crate::native::AbstractState::mole_fractions)).
+///
+/// # Panics
+///
+/// Panics if the lengths don't match -- an invariant violation (a bug in `rfluids`, not
+/// something a caller's input can trigger), since both are derived from the same substance.
+pub(crate) fn zip_component_order(order: Vec<Pure>, fractions: Vec<f64>) -> HashMap<Pure, f64> {
+    assert_eq!(
+        order.len(),
+        fractions.len(),
+        "CoolProp reported {} mole fraction(s) for a {}-component CustomMix",
+        fractions.len(),
+        order.len()
+    );
+    order.into_iter().zip(fractions).collect()
 }
